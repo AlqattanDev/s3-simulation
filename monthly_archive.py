@@ -14,7 +14,7 @@ import sys
 import zipfile
 import tempfile
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import argparse
 
@@ -65,7 +65,7 @@ class MonthlyArchiver:
             reference_date: Reference date (default: today)
 
         Returns:
-            Tuple of (start_datetime, end_datetime) for previous month
+            Tuple of (start_datetime, end_datetime) for previous month (UTC timezone-aware)
         """
         if reference_date is None:
             reference_date = datetime.now()
@@ -82,11 +82,17 @@ class MonthlyArchiver:
         # End of last day of previous month
         end_of_previous_month = first_of_current_month - timedelta(microseconds=1)
 
+        # Make timezone-aware (UTC) for S3 compatibility
+        if self.use_s3:
+            first_of_previous_month = first_of_previous_month.replace(tzinfo=timezone.utc)
+            end_of_previous_month = end_of_previous_month.replace(tzinfo=timezone.utc)
+
         return first_of_previous_month, end_of_previous_month
 
     def list_s3_files(self, prefix, start_date, end_date):
         """
         List S3 files in a prefix that fall within the date range.
+        Uses object metadata 'original-timestamp' if available, otherwise falls back to LastModified.
 
         Args:
             prefix: S3 prefix (folder path)
@@ -104,9 +110,33 @@ class MonthlyArchiver:
                 continue
 
             for obj in page['Contents']:
-                # Check if file's LastModified is within our date range
-                if start_date <= obj['LastModified'] <= end_date:
-                    files.append(obj['Key'])
+                # Get object metadata to check for original-timestamp
+                try:
+                    head_response = self.s3_client.head_object(
+                        Bucket=self.bucket_name,
+                        Key=obj['Key']
+                    )
+                    metadata = head_response.get('Metadata', {})
+
+                    # Use original-timestamp from metadata if available
+                    if 'original-timestamp' in metadata:
+                        # Parse the timestamp (format: YYYY-MM-DDTHH:MM:SS)
+                        timestamp_str = metadata['original-timestamp']
+                        file_date = datetime.strptime(timestamp_str, '%Y-%m-%dT%H:%M:%S')
+                        # Make timezone-aware for comparison
+                        file_date = file_date.replace(tzinfo=timezone.utc)
+                    else:
+                        # Fall back to LastModified
+                        file_date = obj['LastModified']
+
+                    # Check if file's date is within our range
+                    if start_date <= file_date <= end_date:
+                        files.append(obj['Key'])
+
+                except Exception as e:
+                    # If metadata read fails, fall back to LastModified
+                    if start_date <= obj['LastModified'] <= end_date:
+                        files.append(obj['Key'])
 
         return files
 
