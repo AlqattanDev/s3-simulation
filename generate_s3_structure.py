@@ -7,6 +7,7 @@ Creates 3 months of data for Opening and Customer folders.
 import os
 import random
 import string
+import time
 from datetime import datetime, timedelta
 import subprocess
 import sys
@@ -113,6 +114,12 @@ def generate_transaction_id():
     return f"TXN{random.randint(100000, 999999)}"
 
 
+def set_file_timestamp(filepath, timestamp):
+    """Set the modification and access time of a file to a specific timestamp."""
+    timestamp_seconds = timestamp.timestamp()
+    os.utime(filepath, (timestamp_seconds, timestamp_seconds))
+
+
 def generate_opening_folder(base_dir, start_date, end_date):
     """Generate Opening folder structure with transactions."""
     opening_dir = os.path.join(base_dir, "Opening")
@@ -131,7 +138,13 @@ def generate_opening_folder(base_dir, start_date, end_date):
         txn_dir = os.path.join(opening_dir, txn_id)
         os.makedirs(txn_dir, exist_ok=True)
 
-        # Create each file
+        # Calculate timestamp for this transaction (spread evenly across date range)
+        transaction_timestamp = start_date + timedelta(
+            seconds=i * (days * 86400) / total_transactions
+        )
+
+        # Create each file with slightly different timestamps
+        file_offset_minutes = 0
         for filename, size in OPENING_FILE_SPECS.items():
             filepath = os.path.join(txn_dir, filename)
 
@@ -139,6 +152,11 @@ def generate_opening_folder(base_dir, start_date, end_date):
                 create_dummy_xml(filepath, size)
             else:  # PDF
                 create_dummy_pdf(filepath, size)
+
+            # Set unique timestamp for each file (offset by a few minutes)
+            file_timestamp = transaction_timestamp + timedelta(minutes=file_offset_minutes)
+            set_file_timestamp(filepath, file_timestamp)
+            file_offset_minutes += 1
 
         transaction_count += 1
         if transaction_count % 100 == 0:
@@ -173,6 +191,14 @@ def generate_customer_folder(base_dir, start_date, end_date):
             create_dummy_xml(filepath, size)
         else:
             create_dummy_pdf(filepath, size)
+
+        # Set file timestamp to match the date in the filename plus random hours/minutes
+        file_timestamp = doc_date + timedelta(
+            hours=random.randint(0, 23),
+            minutes=random.randint(0, 59),
+            seconds=random.randint(0, 59)
+        )
+        set_file_timestamp(filepath, file_timestamp)
 
     print(f"✓ Customer folder complete: {total_docs} documents")
     return total_docs
